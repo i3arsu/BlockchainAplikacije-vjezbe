@@ -1,0 +1,39 @@
+{
+  "_format": "hh3-sol-build-info-1",
+  "id": "solc-0_8_28-8d03cf6afd5029fc2dfa70bef4e1782d851366e9",
+  "solcVersion": "0.8.28",
+  "solcLongVersion": "0.8.28+commit.7893614a",
+  "userSourceNameMap": {
+    "contracts/MultiCrowdFund.sol": "project/contracts/MultiCrowdFund.sol"
+  },
+  "input": {
+    "language": "Solidity",
+    "settings": {
+      "evmVersion": "cancun",
+      "optimizer": {
+        "enabled": true,
+        "runs": 200
+      },
+      "outputSelection": {
+        "*": {
+          "": [
+            "ast"
+          ],
+          "*": [
+            "abi",
+            "evm.bytecode",
+            "evm.deployedBytecode",
+            "evm.methodIdentifiers",
+            "metadata"
+          ]
+        }
+      },
+      "remappings": []
+    },
+    "sources": {
+      "project/contracts/MultiCrowdFund.sol": {
+        "content": "// SPDX-License-Identifier: UNLICENSED\npragma solidity ^0.8.0;\n \n/// @title CrowdFundMulti (multi-campaign, pull refunds, liveBalance tracked)\n/// @notice Create many campaigns; donations allowed until deadline; owner withdraws on success after deadline; contributors self-claim refunds on failure.\ncontract MultiCrowdFund {\n    struct Campaign {\n        address owner;\n        string title;       // human-friendly\n        uint goal;          // in wei\n        uint deadline;      // unix time (seconds)\n        uint totalRaised;   // lifetime sum (does NOT go down)\n        uint liveBalance;   // withdrawable/refundable amount for this campaign\n        bool goalReached;   // flips as soon as totalRaised >= goal\n        bool fundsWithdrawn;\n    }\n \n    mapping(uint => Campaign) public campaigns;\n    mapping(uint => mapping(address => uint)) public contributions; // campaignId -> donor -> amount\n    uint public nextCampaignId;\n    bool private _locked; // reentrancy guard\n \n    event CampaignCreated(uint indexed id, address indexed owner, string title, uint goal, uint deadline);\n    event Donated(uint indexed id, address indexed from, uint amount, uint newTotal, uint liveBalance);\n    event GoalReached(uint indexed id, uint amount);\n    event FundsWithdrawn(uint indexed id, address indexed owner, uint amount);\n    event Refunded(uint indexed id, address indexed to, uint amount);\n \n    modifier nonReentrant() {\n        require(!_locked, \"Reentrancy\");\n        _locked = true;\n        _;\n        _locked = false;\n    }\n    modifier campaignExists(uint id) {\n        require(campaigns[id].owner != address(0), \"No campaign\");\n        _;\n    }\n    modifier onlyOwner(uint id) {\n        require(msg.sender == campaigns[id].owner, \"Not owner\");\n        _;\n    }\n \n    /// @notice Create campaign; `_goal` is in wei; `_durationMinutes` in minutes\n    function createCampaign(string memory _title, uint _goal, uint _durationMinutes)\n        external\n        returns (uint id)\n    {\n        require(bytes(_title).length != 0, \"Title required\");\n        require(_goal > 0, \"Goal > 0\");\n        require(_durationMinutes > 0, \"Duration > 0\");\n \n        id = nextCampaignId++;\n        uint dl = block.timestamp + _durationMinutes * 60;\n \n        campaigns[id] = Campaign({\n            owner: msg.sender,\n            title: _title,\n            goal: _goal,\n            deadline: dl,\n            totalRaised: 0,\n            liveBalance: 0,\n            goalReached: false,\n            fundsWithdrawn: false\n        });\n \n        emit CampaignCreated(id, msg.sender, _title, _goal, dl);\n    }\n \n    /// @notice Donate ETH to a specific campaign while active (donations continue even after goal until deadline)\n    function donateTo(uint id) external payable campaignExists(id) {\n        require(msg.value > 0, \"No ETH\");\n        Campaign storage c = campaigns[id];\n        require(block.timestamp < c.deadline && !c.fundsWithdrawn, \"Campaign ended\");\n \n        contributions[id][msg.sender] += msg.value;\n        c.totalRaised += msg.value;\n        c.liveBalance += msg.value;\n \n        if (!c.goalReached && c.totalRaised >= c.goal) {\n            c.goalReached = true;\n            emit GoalReached(id, c.totalRaised);\n        }\n \n        emit Donated(id, msg.sender, msg.value, c.totalRaised, c.liveBalance);\n    }\n \n    /// @notice Owner withdraws all liveBalance for a successful campaign after deadline\n    function withdrawFunds(uint id) external campaignExists(id) onlyOwner(id) nonReentrant {\n        Campaign storage c = campaigns[id];\n        require(block.timestamp >= c.deadline, \"Too early\");\n        require(c.goalReached, \"Goal not reached\");\n        require(!c.fundsWithdrawn, \"Already withdrawn\");\n \n        uint amount = c.liveBalance;\n        require(amount > 0, \"Nothing to withdraw\");\n \n        c.fundsWithdrawn = true;     // effects first\n        c.liveBalance = 0;\n \n        (bool ok, ) = payable(c.owner).call{value: amount}(\"\");\n        require(ok, \"Transfer failed\");\n \n        emit FundsWithdrawn(id, c.owner, amount);\n    }\n \n    /// @notice Refund caller’s contribution if campaign failed after deadline\n    function refund(uint id) external campaignExists(id) nonReentrant {\n        Campaign storage c = campaigns[id];\n        require(block.timestamp >= c.deadline, \"Too early\");\n        require(!c.goalReached, \"Campaign succeeded\");\n \n        uint bal = contributions[id][msg.sender];\n        require(bal > 0, \"Nothing to refund\");\n \n        contributions[id][msg.sender] = 0; // effects\n        c.liveBalance -= bal;\n \n        (bool ok, ) = payable(msg.sender).call{value: bal}(\"\");\n        require(ok, \"Refund failed\");\n \n        emit Refunded(id, msg.sender, bal);\n    }\n \n    // --- Convenience views ---\n    function getTimeLeft(uint id) external view campaignExists(id) returns (uint) {\n        Campaign storage c = campaigns[id];\n        if (block.timestamp >= c.deadline) return 0;\n        return c.deadline - block.timestamp;\n    }\n \n    function getCampaignBalance(uint id) external view campaignExists(id) returns (uint) {\n        return campaigns[id].liveBalance;\n    }\n \n    // Block accidental direct sends\n    receive() external payable { revert(\"Use donateTo\"); }\n    fallback() external payable { revert(\"Use donateTo\"); }\n}\n "
+      }
+    }
+  }
+}
