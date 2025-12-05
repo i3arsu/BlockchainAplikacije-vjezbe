@@ -1,68 +1,90 @@
-<script setup lang="ts">
-import { ref, computed } from "vue";
-import { campaigns, fetchCampaigns, contract, accounts, selectedAccountIndex } from "./web3";
-import { ContractFactory } from "ethers";
-
-const amount = ref(0);
-
-// Dobijemo trenutno aktivni account
-const activeAccount = computed(() => accounts[selectedAccountIndex.value]);
-console.log("Active account:", activeAccount.value);
-
-// Doniraj u kampanju s trenutnim accountom
-async function donate(id: number) {
-  if (!contract) return;
-
-  try {
-    const tx = await contract.donateTo(id, { value: amount.value });
-    await tx.wait();
-    amount.value = 0;
-    await fetchCampaigns();
-  } catch (err) {
-    console.error("Donation error:", err);
-  }
-}
-
-// Dohvati koliko je trenutno odabrani account donirao kampanji
-async function getContribution(id: number): Promise<number> {
-  if (!contract) return 0;
-  try {
-    const bal = await contract.contributions(id ,activeAccount);
-    return Number(bal);
-  } catch (err) {
-    console.error(err);
-    return 0;
-  }
-}
-</script>
-
 <template>
-  <div>
-    <h2>Campaigns</h2>
-    <button @click="fetchCampaigns">Refresh</button>
+  <div class="campaign-list">
+    <h2 class="text-2xl font-bold mb-4">All Campaigns</h2>
 
-    <div v-for="c in campaigns" :key="c.id" style="border:1px solid #aaa;padding:10px;margin:8px;">
-      <h3>{{ c.title }}</h3>
-      <p>Goal: {{ c.goal }} wei</p>
-      <p>Raised: {{ c.totalRaised }} wei</p>
-      <p>Status: {{ c.goalReached ? 'Goal reached!' : 'In progress' }}</p>
+    <div v-if="campaignStore.loading">Loading campaigns...</div>
 
-      <!-- Prikaz koliko je trenutno odabrani account donirao -->
-      <p>My contribution: 
-        <span>{{ getContribution(c.id)}}</span> wei
-      </p>
+    <div v-else>
+      <div
+        v-for="campaign in campaignStore.campaigns"
+        :key="campaign.id"
+        class="p-4 border rounded mb-4 bg-gray-100"
+      >
+        <h3 class="text-xl font-semibold">{{ campaign.title }}</h3>
 
-      <input v-model.number="amount" type="number" placeholder="Donate in wei" />
-      <button @click="donate(c.id)">Donate</button>
+        <p><strong>ID:</strong> {{ campaign.id }}</p>
+        <p><strong>Owner:</strong> {{ campaign.owner }}</p>
+        <p><strong>Goal:</strong> {{ campaign.goal }} wei</p>
+        <p><strong>Total Raised:</strong> {{ campaign.totalRaised }} ETH</p>
+        <p><strong>Live Balance:</strong> {{ campaign.liveBalance }} ETH</p>
+        <p><strong>Deadline:</strong> {{ campaign.deadline }}</p>
+        <p><strong>Goal Reached:</strong> {{ campaign.goalReached }}</p>
+        <p><strong>Funds Withdrawn:</strong> {{ campaign.fundsWithdrawn }}</p>
+
+        <div class="mt-3 flex gap-2">
+          <!-- Donate -->
+          <input v-model="donationAmount" placeholder="Amount in ETH" class="border px-2 py-1" />
+          <button class="px-3 py-1 bg-blue-600 text-white rounded" @click="donateEth(campaign.id)">
+            Donate
+          </button>
+
+          <!-- Withdraw (owner only) -->
+          <button
+            v-if="isOwner(campaign.owner)"
+            class="px-3 py-1 bg-green-600 text-white rounded"
+            @click="withdraw(campaign.id)"
+          >
+            Withdraw
+          </button>
+
+          <!-- Refund -->
+          <button class="px-3 py-1 bg-red-600 text-white rounded" @click="refund(campaign.id)">
+            Refund
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
-<script lang="ts">
+<script setup lang="ts">
+import { ref, onMounted } from 'vue'
+import { useCampaignStore } from '../stores/campaignStore'
+import { useWeb3Store } from '../stores/web3'
 
-export function asyncValue(promise: Promise<any>) {
-  const val = ref("loading...");
-  promise.then(r => val.value = r).catch(() => val.value = "error");
-  return val;
+const web3 = useWeb3Store()
+const campaignStore = useCampaignStore()
+
+const donationAmount = ref('0.1')
+
+// Load on mount
+onMounted(async () => {
+  await web3.init()
+  await campaignStore.fetchCampaigns()
+})
+
+function donateEth(id: number) {
+  if (!donationAmount.value) return
+  campaignStore.donate(id, donationAmount.value)
+}
+
+function withdraw(id: number) {
+  campaignStore.withdraw(id)
+}
+
+function refund(id: number) {
+  campaignStore.refund(id)
+}
+
+function isOwner(ownerAddress: string) {
+  if (!web3.accounts.length) return false
+  return ownerAddress.toLowerCase() === web3.accounts[web3.selectedAccountIndex].toLowerCase()
 }
 </script>
+
+<style scoped>
+.campaign-list {
+  max-width: 600px;
+  margin: auto;
+}
+</style>
